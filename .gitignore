@@ -1,0 +1,17 @@
+# Ignore the input and output files
+*.csv
+*.json
+*.txt
+
+# Annoying Windows bullshit
+*.Identifier
+
+# Python virtual environments
+venv/
+env/
+.venv/
+.env/
+**/venv/
+**/env/
+**/.venv/
+**/.env/
