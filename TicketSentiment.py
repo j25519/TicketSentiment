@@ -1,6 +1,7 @@
 import csv
 import os
 import json
+import re
 from nltk.sentiment import SentimentIntensityAnalyzer
 import nltk
 
@@ -39,23 +40,24 @@ with open(input_csv, "r", encoding="utf-8") as infile:
     reader = csv.DictReader(infile)
     rows = list(reader)
 
-# Output fields for the detailed CSV
+# Output fields for the detailed CSV + reusable sentiment analysis cache
 output_fields = ["Subject", "Sentiment", "Compound Score"] + keywords
 results = []
+ticket_data = []
 
-# Analyse each row
+# Analyse each row (now with caching for maximum efficiency!!!)
 for index, row in enumerate(rows, start=1):
     subject = row.get("Subject", "").strip()
     ticket_id = subject if subject else f"[No Subject Row {index}]"
-
     description = row.get("Ticket Description", "")
-    full_text = f"{subject} {description}".lower().strip()
+    full_text_original = f"{subject} {description}".strip()
+    full_text_lower = full_text_original.lower()
 
-    if not full_text:
+    if not full_text_lower:
         continue  # Skip empty rows
 
     # Get sentiment score
-    scores = sia.polarity_scores(full_text)
+    scores = sia.polarity_scores(full_text_lower)
     compound = scores["compound"]
 
     if compound >= 0.05:
@@ -66,8 +68,17 @@ for index, row in enumerate(rows, start=1):
         sentiment = "Neutral"
 
     # Count keywords
-    counts = [full_text.count(keyword) for keyword in keywords]
+    counts = [full_text_lower.count(keyword) for keyword in keywords]
     results.append([ticket_id, sentiment, compound] + counts)
+
+    # Cache for reuse later
+    ticket_data.append({
+        "subject": ticket_id,
+        "sentiment": sentiment,
+        "compound": compound,
+        "text_lower": full_text_lower,
+        "text_original": full_text_original
+    })
 
 # Write full ticket analysis CSV
 with open(output_csv, "w", newline="", encoding="utf-8") as f:
@@ -75,7 +86,7 @@ with open(output_csv, "w", newline="", encoding="utf-8") as f:
     writer.writerow(output_fields)
     writer.writerows(results)
 
-print(f"Full ticket breakdown written to: {output_csv}")
+print(f"Raw data written to: {output_csv}")
 
 # Aggregate keyword stats
 keyword_stats = {
@@ -111,3 +122,41 @@ with open(summary_csv, "w", newline="", encoding="utf-8") as f:
     writer.writerows(sorted_stats)
 
 print(f"Keyword summary written to: {summary_csv}")
+
+# Create list for context rows + keep track of tickets to dedup
+context_rows = []
+seen_pairs = set()
+
+# Extract snippets from tickets using cache + dedup if multiple keywords match
+for ticket in ticket_data:
+    subject = ticket["subject"]
+    sentiment = ticket["sentiment"]
+    full_text = ticket["text_original"]
+    full_text_lower = ticket["text_lower"]
+
+    # Split into sentences with the power of regex to retain punctuation
+    sentences = re.split(r"(?<=[.!?])\s+", full_text)
+
+    for sentence in sentences:
+        sentence_lower = sentence.lower().strip()
+        matched_keywords = [kw for kw in keywords if kw in sentence_lower]
+
+        if matched_keywords:
+            snippet = sentence.strip()
+            dedup_key = (subject, snippet)
+
+            if dedup_key in seen_pairs:
+                continue
+
+            seen_pairs.add(dedup_key)
+            keyword_combined = " + ".join(matched_keywords)  # Merge keywords so you don't just see the first one if deduped
+            context_rows.append([keyword_combined, subject, sentiment, snippet])
+
+# Write context CSV
+context_csv = f"Ticket_Keyword_Context_{file_count}.csv"
+with open(context_csv, "w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f)
+    writer.writerow(["Keyword(s)", "Subject", "Sentiment", "Snippet"])
+    writer.writerows(context_rows)
+
+print(f"Keyword context written to: {context_csv}")
